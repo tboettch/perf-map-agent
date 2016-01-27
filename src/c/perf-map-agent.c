@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 #include <sys/types.h>
 
@@ -260,15 +261,21 @@ jvmtiError set_callbacks(jvmtiEnv *jvmti) {
     return (*jvmti)->SetEventCallbacks(jvmti, &callbacks, (jint)sizeof(callbacks));
 }
 
-JNIEXPORT jint JNICALL
-Agent_OnAttach(JavaVM *vm, char *options, void *reserved) {
+jint initialize(JavaVM *vm, char *options, void *reserved, bool run_once) {
     open_map_file();
 
-    unfold_simple = strstr(options, "unfoldsimple") != NULL;
-    unfold_inlined_methods = strstr(options, "unfold") != NULL || unfold_simple;
-    print_method_signatures = strstr(options, "msig") != NULL;
-    print_source_loc = strstr(options, "sourcepos") != NULL;
-    clean_class_names = strstr(options, "dottedclass") != NULL;
+    /*
+     * Oracle's documentation claims that an empty string will
+     * be passed if no options are present, but in practice
+     * it appears to send NULL instead to Agent_OnLoad.
+     */
+    if (options != NULL) {
+        unfold_simple = strstr(options, "unfoldsimple") != NULL;
+        unfold_inlined_methods = strstr(options, "unfold") != NULL || unfold_simple;
+        print_method_signatures = strstr(options, "msig") != NULL;
+        print_source_loc = strstr(options, "sourcepos") != NULL;
+        clean_class_names = strstr(options, "dottedclass") != NULL;
+    }
 
     jvmtiEnv *jvmti;
     (*vm)->GetEnv(vm, (void **)&jvmti, JVMTI_VERSION_1);
@@ -277,9 +284,26 @@ Agent_OnAttach(JavaVM *vm, char *options, void *reserved) {
     set_notification_mode(jvmti, JVMTI_ENABLE);
     (*jvmti)->GenerateEvents(jvmti, JVMTI_EVENT_DYNAMIC_CODE_GENERATED);
     (*jvmti)->GenerateEvents(jvmti, JVMTI_EVENT_COMPILED_METHOD_LOAD);
-    set_notification_mode(jvmti, JVMTI_DISABLE);
-    close_map_file();
+    if (run_once) {
+        set_notification_mode(jvmti, JVMTI_DISABLE);
+        close_map_file();
+    }
 
     return 0;
+}
+
+JNIEXPORT jint JNICALL
+Agent_OnLoad(JavaVM *vm, char *options, void *reserved) {
+    return initialize(vm, options, reserved, false);
+}
+
+JNIEXPORT jint JNICALL
+Agent_OnAttach(JavaVM *vm, char *options, void *reserved) {
+    return initialize(vm, options, reserved, true);
+}
+
+JNIEXPORT void JNICALL 
+Agent_OnUnload(JavaVM *vm) {
+    close_map_file();
 }
 
